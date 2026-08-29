@@ -109,7 +109,7 @@ def main():
         print("[ERROR] Missing DIGITALPLAT_API_TOKEN", file=sys.stderr)
         return 1
 
-    raw_domains = os.getenv("DIGITALPLAT_DOMAINS", "299.dpdns.org").replace(",", "\n")
+    raw_domains = os.getenv("DIGITALPLAT_DOMAINS", "example.dpdns.org").replace(",", "\n")
     targets = [d.strip().lower() for d in raw_domains.splitlines() if d.strip()]
     if not targets:
         print("[ERROR] No target domains configured", file=sys.stderr)

@@ -1,6 +1,6 @@
 # DigitalPlat 域名自动续期
 
-一个基于 GitHub Actions 的自动化脚本，每月自动检查 **DigitalPlat** 域名的有效期，当剩余有效期 **少于 120 天** 时自动发起续期请求。默认针对 `299.dpdns.org`，配置可随意更改以支持任意数量域名。
+一个基于 GitHub Actions 的自动化脚本，每月自动检查 **DigitalPlat** 域名的有效期，当剩余有效期 **少于 120 天** 时自动发起续期请求。默认使用示例域名 `example.dpdns.org`，请通过 `DIGITALPLAT_DOMAINS` Variable 填入你的真实域名（支持多个）。
 
 ## 工作原理
 
@@ -37,7 +37,7 @@
 
 | 名称 | 默认值 | 说明 |
 | --- | --- | --- |
-| `DIGITALPLAT_DOMAINS` | `299.dpdns.org` | 要管理的域名，一行一个，可用逗号分隔多个 |
+| `DIGITALPLAT_DOMAINS` | `example.dpdns.org`（示例） | 要管理的域名，一行一个，可用逗号分隔多个（请替换为真实域名） |
 | `DIGITALPLAT_RENEW_BEFORE_DAYS` | `120` | 剩余天数小于等于该值才续期 |
 | `DIGITALPLAT_RENEWAL_TYPE` | `free` | 续期类型 |
 | `DIGITALPLAT_RENEWAL_YEARS` | `1` | 续期年数 |
@@ -48,14 +48,14 @@
 打开 `Actions` 页，选中 **DigitalPlat Domain Auto-Renew** → **Run workflow**，确认日志输出：
 
 ```
-[CHECK] 299.dpdns.org expires=2027-06-04 days_left=279 status=ok
-[SKIP] 299.dpdns.org not yet within renewal window
+[CHECK] example.dpdns.org expires=2027-06-04 days_left=279 status=ok
+[SKIP] example.dpdns.org not yet within renewal window
 ```
 
 若域名已进入续期窗口，则会输出：
 
 ```
-[RENEWED] 299.dpdns.org new_expires=...
+[RENEWED] example.dpdns.org new_expires=...
 ```
 
 ## 定时说明

@@ -24,7 +24,7 @@ jobs:
       - name: Check and renew domains
         env:
           DIGITALPLAT_API_TOKEN: ${{ secrets.DIGITALPLAT_API_TOKEN }}
-          DIGITALPLAT_DOMAINS: ${{ vars.DIGITALPLAT_DOMAINS || '299.dpdns.org' }}
+          DIGITALPLAT_DOMAINS: ${{ vars.DIGITALPLAT_DOMAINS || 'example.dpdns.org' }}
           DIGITALPLAT_RENEW_BEFORE_DAYS: ${{ vars.DIGITALPLAT_RENEW_BEFORE_DAYS || '120' }}
           DIGITALPLAT_RENEWAL_TYPE: ${{ vars.DIGITALPLAT_RENEWAL_TYPE || 'free' }}
           DIGITALPLAT_RENEWAL_YEARS: ${{ vars.DIGITALPLAT_RENEWAL_YEARS || '1' }}
