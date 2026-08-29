@@ -1,0 +1,32 @@
+name: DigitalPlat Domain Auto-Renew
+
+on:
+  schedule:
+    # 1st of every month at 04:17 UTC
+    - cron: "17 4 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  renew:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Check and renew domains
+        env:
+          DIGITALPLAT_API_TOKEN: ${{ secrets.DIGITALPLAT_API_TOKEN }}
+          DIGITALPLAT_DOMAINS: ${{ vars.DIGITALPLAT_DOMAINS || '299.dpdns.org' }}
+          DIGITALPLAT_RENEW_BEFORE_DAYS: ${{ vars.DIGITALPLAT_RENEW_BEFORE_DAYS || '120' }}
+          DIGITALPLAT_RENEWAL_TYPE: ${{ vars.DIGITALPLAT_RENEWAL_TYPE || 'free' }}
+          DIGITALPLAT_RENEWAL_YEARS: ${{ vars.DIGITALPLAT_RENEWAL_YEARS || '1' }}
+          DRY_RUN: ${{ vars.DRY_RUN }}
+        run: python scripts/renew_domain.py
