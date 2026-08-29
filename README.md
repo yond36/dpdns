@@ -1,15 +1,16 @@
 # DigitalPlat 域名自动续期
 
-一个基于 GitHub Actions 的自动化脚本，每月自动检查 **DigitalPlat** 域名的有效期，当剩余有效期 **少于 120 天** 时自动发起续期请求。默认使用示例域名 `example.dpdns.org`，请通过 `DIGITALPLAT_DOMAINS` Variable 填入你的真实域名（支持多个）。
+一个基于 GitHub Actions 的自动化脚本，每月自动检查 **DigitalPlat** 账号下的域名，当剩余有效期 **少于 120 天** 时自动发起续期请求。默认自动获取账号下 **所有免费域名** 并续期；也支持通过 `DIGITALPLAT_DOMAINS` Variable 自定义只续期指定域名。
 
 ## 工作原理
 
 每月定时（每次月度第 1 天 04:17 UTC）触发一次工作流：
 
 1. 通过 DigitalPlat Domain API 拉取域名清单：`GET /api/v1/domains`
-2. 计算目标域名的剩余有效天数
-3. 如果剩余天数 ≤ 阈值（默认 `120`），调用 `POST /api/v1/domains/{domain}/renew` 进行续期（默认 `renewal_type=free`, `years=1`）
-4. 打印检查与续期结果，供 Actions 日志查看
+2. 默认选取所有 `slot_type = free` 的免费域名；若配置了 `DIGITALPLAT_DOMAINS`，则只处理指定域名
+3. 计算每个目标域名的剩余有效天数
+4. 如果剩余天数 ≤ 阈值（默认 `120`），调用 `POST /api/v1/domains/{domain}/renew` 进行续期（默认 `renewal_type=free`, `years=1`）
+5. 打印检查与续期结果，供 Actions 日志查看
 
 不需要任何第三方依赖，仅使用 Python 标准库。
 
@@ -33,11 +34,11 @@
 | --- | --- |
 | `DIGITALPLAT_API_TOKEN` | DigitalPlat 的 `dp_live_...` API Key |
 
-**Variable（可选，默认值已可用）**
+**Variable（均可选，默认值已可用）**
 
 | 名称 | 默认值 | 说明 |
 | --- | --- | --- |
-| `DIGITALPLAT_DOMAINS` | `example.dpdns.org`（示例） | 要管理的域名，一行一个，可用逗号分隔多个（请替换为真实域名） |
+| `DIGITALPLAT_DOMAINS` | 空 | 指定要续期的域名，一行一个，可用逗号分隔；**留空则自动续期所有免费域名** |
 | `DIGITALPLAT_RENEW_BEFORE_DAYS` | `120` | 剩余天数小于等于该值才续期 |
 | `DIGITALPLAT_RENEWAL_TYPE` | `free` | 续期类型 |
 | `DIGITALPLAT_RENEWAL_YEARS` | `1` | 续期年数 |
@@ -48,7 +49,8 @@
 打开 `Actions` 页，选中 **DigitalPlat Domain Auto-Renew** → **Run workflow**，确认日志输出：
 
 ```
-[CHECK] example.dpdns.org expires=2027-06-04 days_left=279 status=ok
+MODE: auto-renew all free domains (1 eligible)
+[CHECK] example.dpdns.org expires=2027-06-04 days_left=279 status=ok slot=free
 [SKIP] example.dpdns.org not yet within renewal window
 ```
 

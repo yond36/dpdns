@@ -103,22 +103,33 @@ def renew_domain(domain, token, renewal_type, years):
     return records[0] if records else {"domain": domain}
 
 
+def _is_free_domain(raw):
+    # A domain is considered free-renewable when its slot type is "free" (or
+    # unspecified) unless it is explicitly marked as not renewable.
+    slot = _pick(raw, ("slot_type",))
+    if slot is not None and str(slot).strip().lower() not in ("free", ""):
+        return False
+    renewable = _pick(raw, ("can_free_renew", "can_renew", "renewable"))
+    if isinstance(renewable, str):
+        renewable = renewable.strip().lower() in ("1", "true", "yes", "y")
+    elif renewable is not None:
+        renewable = bool(renewable)
+    if renewable is False:
+        return False
+    return True
+
+
 def main():
     token = os.getenv("DIGITALPLAT_API_TOKEN")
     if not token:
         print("[ERROR] Missing DIGITALPLAT_API_TOKEN", file=sys.stderr)
         return 1
 
-    raw_domains = os.getenv("DIGITALPLAT_DOMAINS", "example.dpdns.org").replace(",", "\n")
-    targets = [d.strip().lower() for d in raw_domains.splitlines() if d.strip()]
-    if not targets:
-        print("[ERROR] No target domains configured", file=sys.stderr)
-        return 1
-
     threshold = int(os.getenv("DIGITALPLAT_RENEW_BEFORE_DAYS", str(DEFAULT_THRESHOLD)))
     renewal_type = os.getenv("DIGITALPLAT_RENEWAL_TYPE", "free")
     years = int(os.getenv("DIGITALPLAT_RENEWAL_YEARS", "1"))
     dry_run = os.getenv("DRY_RUN", "").lower() in ("1", "true", "yes")
+    explicit_raw = os.getenv("DIGITALPLAT_DOMAINS", "")
 
     try:
         domains = list_domains(token)
@@ -126,20 +137,34 @@ def main():
         print(f"[ERROR] Failed to list domains: {exc}", file=sys.stderr)
         return 1
 
-    domain_map = {}
-    for raw in domains:
-        name = _pick(raw, ("domain", "name", "full_domain"))
-        if name:
-            domain_map[str(name).strip().lower()] = raw
-
     now = datetime.now(timezone.utc)
     print(f"UTC now: {now.isoformat(timespec='seconds')}")
     print(f"Renewal window: renew within {threshold} day(s) before expiry")
 
+    if explicit_raw.strip():
+        targets = [d.strip().lower() for d in explicit_raw.replace(",", "\n").splitlines() if d.strip()]
+        if not targets:
+            print("[ERROR] DIGITALPLAT_DOMAINS is set but contains no domains", file=sys.stderr)
+            return 1
+        domain_map = {}
+        for raw in domains:
+            name = _pick(raw, ("domain", "name", "full_domain"))
+            if name:
+                domain_map[str(name).strip().lower()] = raw
+        candidates = [(domain, domain_map.get(domain)) for domain in targets]
+        print(f"MODE: evaluate only DIGITALPLAT_DOMAINS ({len(candidates)} target(s))")
+    else:
+        candidates = [
+            (str(_pick(raw, ("domain", "name", "full_domain")) or "").strip().lower(), raw)
+            for raw in domains
+            if _is_free_domain(raw)
+        ]
+        candidates = [(domain, raw) for domain, raw in candidates if domain]
+        print(f"MODE: auto-renew all free domains ({len(candidates)} eligible)")
+
     changed = False
     errors = []
-    for domain in targets:
-        raw = domain_map.get(domain)
+    for domain, raw in candidates:
         if raw is None:
             errors.append(f"{domain}: not found in DigitalPlat account")
             continue
@@ -152,7 +177,8 @@ def main():
         expiry = _parse_date(expiry_raw)
         days_left = (expiry.date() - now.date()).days
         status = str(_pick(raw, ("status",)) or "-")
-        print(f"[CHECK] {domain} expires={expiry.strftime(DATE_FORMAT)} days_left={days_left} status={status}")
+        slot = str(_pick(raw, ("slot_type",)) or "-")
+        print(f"[CHECK] {domain} expires={expiry.strftime(DATE_FORMAT)} days_left={days_left} status={status} slot={slot}")
 
         if days_left > threshold:
             print(f"[SKIP] {domain} not yet within renewal window")
@@ -173,7 +199,7 @@ def main():
     for error in errors:
         print(f"[ERROR] {error}", file=sys.stderr)
     if not changed and not errors:
-        print("[DONE] No domains renewed (targets not in renewal window or dry-run)")
+        print("[DONE] No domains renewed (not in renewal window or dry-run)")
     elif changed:
         print("[DONE] Renewal requested")
     return 1 if errors else 0
