@@ -1,7 +1,7 @@
 name: Domain Renewal
 on:
   schedule:
-    - cron: '0 0 1 * *'  # 每月1号运行一次
+    - cron: '15 1 15 * *'  # 每月15日 北京时间9:15 (UTC 1:15) 运行一次
   workflow_dispatch:  # 允许手动触发
 jobs:
   renew:
