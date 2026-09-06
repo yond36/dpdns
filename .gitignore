@@ -2,6 +2,9 @@
 .env
 .env.*
 
+# Scratch / local files
+available_3letter.txt
+
 # Runtime state
 state/
 
