@@ -1,15 +1,21 @@
-# Secrets / local config
-.env
-.env.*
-
-# Scratch / local files
-available_3letter.txt
-
-# Runtime state
-state/
-
 # Python
 __pycache__/
-*.pyc
-.venv/
+*.py[cod]
+*.log
+
+# Virtual env
 venv/
+.env
+
+# Playwright / debug artifacts
+*.png
+login_form.html
+renewal_results.json
+login_timeout_page_source.html
+captcha_solve_failed_source.html
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

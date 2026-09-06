@@ -1,101 +1,43 @@
-# DigitalPlat 域名到期检查与通知
+# DigitalPlat 免费域名自动续期脚本
 
-一个基于 GitHub Actions 的自动化脚本，每月自动检查 **DigitalPlat** 账号下的免费域名有效期，当有域名剩余有效期 **少于 120 天** 时，通过 **Telegram** 或 **Bark** 推送提醒。
+这是一个使用 Python 和 Playwright 编写的脚本，旨在自动续期您在 [DigitalPlat](https://dashboard.digitalplat.org/) 上的免费域名。脚本通过 GitHub Actions 实现云端定时运行，无需您自己准备服务器。
 
-> **注意**：DigitalPlat 的公开 API 并未开放续期接口（`POST /domains/{domain}/renew` 会返回 `404 registered_domain_not_found`），因此本脚本只负责**检查与提醒**，续期需前往 [Dashboard](https://dash.domain.digitalplat.org/dashboard) 手动操作。
+## ✨ 工作原理
 
-## 工作原理
+脚本会模拟真人操作：
+1. 启动一个真实 Chrome 浏览器（headless，`channel="chrome"`）。
+2. 访问 DigitalPlat 登录页面。若出现 Cloudflare 人机验证，脚本会通过 **2captcha** 自动解决（拦截 `turnstile.render` 提取参数 → `TurnstileTaskProxyless` 求解 → 执行回调）。
+3. 解决登录表单自带的 Turnstile 组件，直接调用面板 API 完成登录（携带 `panel_csrf_token`）。
+4. 通过 `/_panel_api/api/domains` 获取域名列表。
+5. 对每个可续期的域名调用 `/_panel_api/api/domains/{域名}/renew` 完成免费续期（`renewal_type=free, years=1`）。
 
-每月定时（月度第 1 天 04:17 UTC）触发一次工作流：
+## 🚀 如何使用
 
-1. 通过 DigitalPlat Domain API 拉取域名清单：`GET /api/v1/domains`
-2. 默认选取所有 `slot_type = free` 的免费域名；若配置了 `DIGITALPLAT_DOMAINS`，则只检查指定域名
-3. 计算每个域名的剩余有效天数
-4. 将「剩余天数 ≤ 阈值（默认 `120`）」的域名汇总为提醒消息
-5. 通过 Telegram Bot 和/或 Bark 推送通知；同时在 Actions 日志打印检查结果
+1.  **Fork 本项目**: ...
 
-不需要任何第三方依赖，仅使用 Python 标准库。
+2.  **获取 Bark Key**: ...
 
-## 如何 Fork 并使用
+3.  **设置 Secrets**:
+    * 在您 Fork 后的仓库中，点击 `Settings` (设置) > `Secrets and variables` > `Actions`。
+    * 点击 `New repository secret` 创建以下 Secret：
 
-### 第 1 步：创建 DigitalPlat API Key
+    **必须的 Secrets:**
+    * **`DP_EMAIL`**: 您的 DigitalPlat 登录邮箱。
+    * **`DP_PASSWORD`**: 您的 DigitalPlat 登录密码。
+    * **`BARK_KEY`**: 您在第2步中获取的 Bark Key。
 
-打开 [DigitalPlat Dashboard → API Keys](https://dash.domain.digitalplat.org/dashboard/api/keys)，创建一个 `dp_live_...` 开头的生产 API Key。
+    **可选的 Secrets:**
+    * **`CAPTCHA_API_KEY`**: 您的 [2captcha](https://2captcha.com) API Key。DigitalPlat 登录页有 Cloudflare 人机验证，配置后脚本会自动通过 2captcha 解决该验证（每次约 $0.00145）。
+    * **`BARK_SERVER`**: 您自建的 Bark 服务器地址，例如 `https://your.bark.server.com`。**如果您使用的是官方公共服务，请不要创建此 Secret。**
 
-### 第 2 步：Fork 本仓库
+4.  **启用并运行 GitHub Actions**:
+    * 进入仓库的 `Actions` 标签页。
+    * 在左侧找到 `Renew DigitalPlat Free Domains` 工作流。
+    * 该工作流会根据计划（默认每15天）自动运行。
+    * 如果您想立即测试，可以点击 `Run workflow` 按钮手动触发一次。运行结束后，您的手机应会收到一条推送通知。
 
-点击页面右上角 **Fork**，把本仓库复制到你的账号下。
+## ⚠️ 注意事项
 
-### 第 3 步：配置 Secret 和 Variable
-
-进入 `Settings → Secrets and variables → Actions`：
-
-**Secret**
-
-| 名称 | 必填 | 说明 |
-| --- | --- | --- |
-| `DIGITALPLAT_API_TOKEN` | ✅ | DigitalPlat 的 `dp_live_...` API Key |
-| `TELEGRAM_BOT_TOKEN` | 可选 | Telegram Bot Token（来自 @BotFather） |
-| `TELEGRAM_CHAT_ID` | 可选 | 接收通知的 Telegram Chat ID |
-| `BARK_KEY` | 可选 | Bark 推送 Key |
-
-**Variable（均可选，默认值已可用）**
-
-| 名称 | 默认值 | 说明 |
-| --- | --- | --- |
-| `DIGITALPLAT_DOMAINS` | 空 | 只检查指定域名，一行一个，可用逗号分隔；**留空则检查所有免费域名** |
-| `DIGITALPLAT_RENEW_BEFORE_DAYS` | `120` | 剩余天数小于等于该值则标记为需续期 |
-| `BARK_SERVER` | `https://api.day.app` | Bark 自建服务器地址（可选） |
-
-> Telegram 和 Bark 二选一或同时配置均可；都不配置时脚本只打印日志，不发通知。
-
-### 第 4 步：手动跑一次验证
-
-打开 `Actions` 页，选中 **DigitalPlat Domain Check & Notify** → **Run workflow**，确认日志输出：
-
-```
-MODE: check all free domains (1 eligible)
-[CHECK] example.dpdns.org expires=2027-06-04 days_left=279 status=ok slot=free renewal=no
-[SUMMARY] checked=1 needing_renewal=0
-[NOTIFY] Telegram sent
-[NOTIFY] Bark sent
-```
-
-## 定时说明
-
-工作流由 `.github/workflows/digitalplat-renew.yml` 中的 cron 控制：
-
-```yaml
-on:
-  schedule:
-    - cron: "17 4 1 * *"   # 每月第 1 天 04:17 UTC
-  workflow_dispatch:        # 支持手动触发
-```
-
-如需调整频率，修改该文件的 `cron` 表达式即可。
-
-## 目录结构
-
-```
-├── .github/workflows/digitalplat-renew.yml   # 月度定时工作流
-├── scripts/check_domains.py                  # 检查与通知脚本
-└── .gitignore
-```
-
-## API 说明
-
-- Base URL：`https://domain-api.digitalplat.org/api/v1`（可用 `DIGITALPLAT_API_BASE` 环境变量覆盖）
-- 鉴权：`Authorization: Bearer <API Key>`
-- 使用接口：
-  - `GET /domains` — 拉取域名清单
-
-## 通知渠道
-
-- **Telegram**：调用 Bot API `sendMessage`，需要 `TELEGRAM_BOT_TOKEN` 与 `TELEGRAM_CHAT_ID`
-- **Bark**：调用 Bark 推送服务，需要 `BARK_KEY`（可用 `BARK_SERVER` 指定自建服务器）
-
-## 注意事项
-
-- **安全**：API Key、Telegram Token、Bark Key 请放在 GitHub **Secret** 中，切勿写入源码或提交到仓库。
-- **User-Agent**：DigitalPlat 网关（Cloudflare）会拦截类似机器人的自定义 User-Agent（返回 403 Challenge）。脚本默认使用浏览器风格的 UA，如需自定义可设置 `DIGITALPLAT_USER_AGENT`。
-- **续期窗口**：平台通常只在剩余有效期低于约 180 天时才允许续期，且 API 未开放续期接口，请在收到提醒后前往 Dashboard 手动续期。
+* **安全性**: 您的账号密码存储在 GitHub 的加密 Secrets 中，脚本通过环境变量读取，不会暴露在代码或日志里，非常安全。
+* **续期限制**: DigitalPlat 规定域名距到期 **超过 120 天**时不允许续期。脚本会跳过这类域名并正常结束。
+* **脚本健壮性**: 本脚本依赖 DigitalPlat 的 API 结构。如果未来网站大幅改版，可能会导致脚本失效。届时需要根据新的接口更新脚本。
