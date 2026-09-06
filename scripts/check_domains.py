@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""DigitalPlat DNS domain auto-renewal script.
+"""DigitalPlat DNS domain expiry checker with Telegram/Bark notifications.
 
-Checks target domains and renews them via the DigitalPlat Domain API when the
-remaining validity drops below a threshold. Designed to be driven by a
-scheduled GitHub Actions workflow.
+Fetches the domain list via the DigitalPlat Domain API, identifies free
+domains whose remaining validity is inside the renewal window, and sends a
+summary via Telegram and/or Bark. DigitalPlat's public API does not expose a
+renewal endpoint, so renewal must be done manually in the Dashboard.
 """
 
 import json
@@ -12,12 +13,12 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
-import uuid
 from datetime import datetime, timezone
 
 API_BASE = os.getenv("DIGITALPLAT_API_BASE", "https://domain-api.digitalplat.org/api/v1").rstrip("/")
 DEFAULT_THRESHOLD = 120
 DATE_FORMAT = "%Y-%m-%d"
+DASHBOARD_URL = "https://dash.domain.digitalplat.org/dashboard"
 # Cloudflare's bot detection blocks custom binary-looking User-Agents, so default
 # to a realistic browser agent to keep the scheduled automation from being challenged.
 DEFAULT_UA = (
@@ -26,15 +27,13 @@ DEFAULT_UA = (
 )
 
 
-def _request(path, method="GET", payload=None, token=None, idempotency_key=None):
+def _request(path, method="GET", payload=None, token=None):
     headers = {
         "Authorization": f"Bearer {token}",
         "Accept": "application/json",
         "Content-Type": "application/json",
         "User-Agent": os.getenv("DIGITALPLAT_USER_AGENT", DEFAULT_UA),
     }
-    if idempotency_key:
-        headers["Idempotency-Key"] = idempotency_key
     body = None if payload is None else json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(f"{API_BASE}{path}", data=body, headers=headers, method=method)
     try:
@@ -98,23 +97,7 @@ def list_domains(token):
     return _extract_domains(_unwrap(_request("/domains", token=token)))
 
 
-def renew_domain(domain, token, renewal_type, years):
-    encoded = urllib.parse.quote(domain, safe="")
-    payload = {"renewal_type": renewal_type, "years": years}
-    data = _unwrap(_request(
-        f"/domains/{encoded}/renew",
-        method="POST",
-        payload=payload,
-        token=token,
-        idempotency_key=str(uuid.uuid4()),
-    ))
-    records = _extract_domains(data)
-    return records[0] if records else {"domain": domain}
-
-
 def _is_free_domain(raw):
-    # A domain is considered free-renewable when its slot type is "free" (or
-    # unspecified) unless it is explicitly marked as not renewable.
     slot = _pick(raw, ("slot_type",))
     if slot is not None and str(slot).strip().lower() not in ("free", ""):
         return False
@@ -128,6 +111,58 @@ def _is_free_domain(raw):
     return True
 
 
+def _expiry(raw):
+    raw_val = _pick(raw, ("expiry_date", "expires_at", "expiryDate", "expiresAt", "expiration_date"))
+    if not raw_val:
+        return None
+    text = str(raw_val).strip().lower()
+    if text in ("permanent", "null", "none", "0"):
+        return None
+    try:
+        return _parse_date(raw_val)
+    except ValueError:
+        return None
+
+
+def _send_telegram(bot_token, chat_id, text):
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    data = urllib.parse.urlencode({"chat_id": chat_id, "text": text}).encode("utf-8")
+    req = urllib.request.Request(url, data=data, headers={"User-Agent": DEFAULT_UA})
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        resp.read()
+
+
+def _send_bark(bark_key, text, server):
+    url = f"{server.rstrip('/')}/{bark_key}"
+    payload = {"title": "DigitalPlat 域名到期检查", "body": text, "group": "DigitalPlat Renew"}
+    body = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=body,
+        headers={"Content-Type": "application/json", "User-Agent": DEFAULT_UA},
+    )
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        resp.read()
+
+
+def build_message(now, threshold, results):
+    lines = ["DigitalPlat 域名到期检查", f"时间: {now.strftime('%Y-%m-%d %H:%M UTC')}", ""]
+
+    needing = [r for r in results if r["needs_renewal"]]
+    if needing:
+        lines.append(f"⚠️ 以下 {len(needing)} 个域名将在 {threshold} 天内到期，需续期:")
+        for r in needing:
+            lines.append(f"- {r['domain']} (到期 {r['expiry'].strftime(DATE_FORMAT)}, 剩余 {r['days_left']} 天)")
+    else:
+        lines.append("✅ 没有域名需要续期")
+
+    lines.append("")
+    lines.append(f"检查域名: {len(results)} 个")
+    lines.append("DigitalPlat API 未开放续期接口，续期请前往 Dashboard 手动操作")
+    lines.append(DASHBOARD_URL)
+    return "\n".join(lines)
+
+
 def main():
     token = os.getenv("DIGITALPLAT_API_TOKEN")
     if not token:
@@ -135,10 +170,11 @@ def main():
         return 1
 
     threshold = int(os.getenv("DIGITALPLAT_RENEW_BEFORE_DAYS", str(DEFAULT_THRESHOLD)))
-    renewal_type = os.getenv("DIGITALPLAT_RENEWAL_TYPE", "free")
-    years = int(os.getenv("DIGITALPLAT_RENEWAL_YEARS", "1"))
-    dry_run = os.getenv("DRY_RUN", "").lower() in ("1", "true", "yes")
     explicit_raw = os.getenv("DIGITALPLAT_DOMAINS", "")
+    telegram_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    telegram_chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+    bark_key = os.getenv("BARK_KEY", "")
+    bark_server = os.getenv("BARK_SERVER", "https://api.day.app")
 
     try:
         domains = list_domains(token)
@@ -148,7 +184,7 @@ def main():
 
     now = datetime.now(timezone.utc)
     print(f"UTC now: {now.isoformat(timespec='seconds')}")
-    print(f"Renewal window: renew within {threshold} day(s) before expiry")
+    print(f"Renewal window: notify within {threshold} day(s) before expiry")
 
     if explicit_raw.strip():
         targets = [d.strip().lower() for d in explicit_raw.replace(",", "\n").splitlines() if d.strip()]
@@ -161,7 +197,7 @@ def main():
             if name:
                 domain_map[str(name).strip().lower()] = raw
         candidates = [(domain, domain_map.get(domain)) for domain in targets]
-        print(f"MODE: evaluate only DIGITALPLAT_DOMAINS ({len(candidates)} target(s))")
+        print(f"MODE: check only DIGITALPLAT_DOMAINS ({len(candidates)} target(s))")
     else:
         candidates = [
             (str(_pick(raw, ("domain", "name", "full_domain")) or "").strip().lower(), raw)
@@ -169,49 +205,56 @@ def main():
             if _is_free_domain(raw)
         ]
         candidates = [(domain, raw) for domain, raw in candidates if domain]
-        print(f"MODE: auto-renew all free domains ({len(candidates)} eligible)")
+        print(f"MODE: check all free domains ({len(candidates)} eligible)")
 
-    changed = False
-    errors = []
+    results = []
     for domain, raw in candidates:
         if raw is None:
-            errors.append(f"{domain}: not found in DigitalPlat account")
+            print(f"[ERROR] {domain}: not found in DigitalPlat account", file=sys.stderr)
             continue
 
-        expiry_raw = _pick(raw, ("expiry_date", "expires_at", "expiryDate", "expiresAt", "expiration_date"))
-        if not expiry_raw:
-            errors.append(f"{domain}: missing expiry date")
-            continue
-
-        expiry = _parse_date(expiry_raw)
-        days_left = (expiry.date() - now.date()).days
+        expiry = _expiry(raw)
         status = str(_pick(raw, ("status",)) or "-")
         slot = str(_pick(raw, ("slot_type",)) or "-")
-        print(f"[CHECK] {domain} expires={expiry.strftime(DATE_FORMAT)} days_left={days_left} status={status} slot={slot}")
-
-        if days_left > threshold:
-            print(f"[SKIP] {domain} not yet within renewal window")
+        if expiry is None:
+            print(f"[CHECK] {domain} expires=permanent/unknown status={status} slot={slot} renewal=no")
+            results.append({"domain": domain, "expiry": None, "days_left": None, "needs_renewal": False})
             continue
 
-        if dry_run:
-            print(f"[DRY-RUN] would renew {domain} (renewal_type={renewal_type}, years={years})")
-            continue
+        days_left = (expiry.date() - now.date()).days
+        needs = days_left <= threshold
+        print(
+            f"[CHECK] {domain} expires={expiry.strftime(DATE_FORMAT)} "
+            f"days_left={days_left} status={status} slot={slot} renewal={'yes' if needs else 'no'}"
+        )
+        results.append({"domain": domain, "expiry": expiry, "days_left": days_left, "needs_renewal": needs})
 
+    needing = [r for r in results if r["needs_renewal"]]
+    print(f"[SUMMARY] checked={len(results)} needing_renewal={len(needing)}")
+    if not needing:
+        print("[DONE] No domains need renewal")
+
+    message = build_message(now, threshold, results)
+
+    if telegram_token and telegram_chat_id:
         try:
-            updated = renew_domain(domain, token, renewal_type, years)
-            new_expiry = _parse_date(_pick(updated, ("expiry_date", "expires_at")))
-            print(f"[RENEWED] {domain} new_expires={new_expiry.strftime(DATE_FORMAT)}")
-            changed = True
+            _send_telegram(telegram_token, telegram_chat_id, message)
+            print("[NOTIFY] Telegram sent")
         except Exception as exc:
-            errors.append(f"{domain}: renewal failed: {exc}")
+            print(f"[ERROR] Telegram notification failed: {exc}", file=sys.stderr)
+    else:
+        print("[NOTIFY] Telegram not configured (set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)")
 
-    for error in errors:
-        print(f"[ERROR] {error}", file=sys.stderr)
-    if not changed and not errors:
-        print("[DONE] No domains renewed (not in renewal window or dry-run)")
-    elif changed:
-        print("[DONE] Renewal requested")
-    return 1 if errors else 0
+    if bark_key:
+        try:
+            _send_bark(bark_key, message, bark_server)
+            print("[NOTIFY] Bark sent")
+        except Exception as exc:
+            print(f"[ERROR] Bark notification failed: {exc}", file=sys.stderr)
+    else:
+        print("[NOTIFY] Bark not configured (set BARK_KEY)")
+
+    return 0
 
 
 if __name__ == "__main__":
@@ -219,4 +262,4 @@ if __name__ == "__main__":
         raise SystemExit(main())
     except Exception as exc:
         print(f"[FATAL] {exc}", file=sys.stderr)
-    raise SystemExit(1)
+        raise SystemExit(1)

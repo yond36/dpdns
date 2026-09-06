@@ -1,16 +1,18 @@
-# DigitalPlat 域名自动续期
+# DigitalPlat 域名到期检查与通知
 
-一个基于 GitHub Actions 的自动化脚本，每月自动检查 **DigitalPlat** 账号下的域名，当剩余有效期 **少于 120 天** 时自动发起续期请求。默认自动获取账号下 **所有免费域名** 并续期；也支持通过 `DIGITALPLAT_DOMAINS` Variable 自定义只续期指定域名。
+一个基于 GitHub Actions 的自动化脚本，每月自动检查 **DigitalPlat** 账号下的免费域名有效期，当有域名剩余有效期 **少于 120 天** 时，通过 **Telegram** 或 **Bark** 推送提醒。
+
+> **注意**：DigitalPlat 的公开 API 并未开放续期接口（`POST /domains/{domain}/renew` 会返回 `404 registered_domain_not_found`），因此本脚本只负责**检查与提醒**，续期需前往 [Dashboard](https://dash.domain.digitalplat.org/dashboard) 手动操作。
 
 ## 工作原理
 
-每月定时（每次月度第 1 天 04:17 UTC）触发一次工作流：
+每月定时（月度第 1 天 04:17 UTC）触发一次工作流：
 
 1. 通过 DigitalPlat Domain API 拉取域名清单：`GET /api/v1/domains`
-2. 默认选取所有 `slot_type = free` 的免费域名；若配置了 `DIGITALPLAT_DOMAINS`，则只处理指定域名
-3. 计算每个目标域名的剩余有效天数
-4. 如果剩余天数 ≤ 阈值（默认 `120`），调用 `POST /api/v1/domains/{domain}/renew` 进行续期（默认 `renewal_type=free`, `years=1`）
-5. 打印检查与续期结果，供 Actions 日志查看
+2. 默认选取所有 `slot_type = free` 的免费域名；若配置了 `DIGITALPLAT_DOMAINS`，则只检查指定域名
+3. 计算每个域名的剩余有效天数
+4. 将「剩余天数 ≤ 阈值（默认 `120`）」的域名汇总为提醒消息
+5. 通过 Telegram Bot 和/或 Bark 推送通知；同时在 Actions 日志打印检查结果
 
 不需要任何第三方依赖，仅使用 Python 标准库。
 
@@ -28,36 +30,35 @@
 
 进入 `Settings → Secrets and variables → Actions`：
 
-**Secret（必填）**
+**Secret**
 
-| 名称 | 说明 |
-| --- | --- |
-| `DIGITALPLAT_API_TOKEN` | DigitalPlat 的 `dp_live_...` API Key |
+| 名称 | 必填 | 说明 |
+| --- | --- | --- |
+| `DIGITALPLAT_API_TOKEN` | ✅ | DigitalPlat 的 `dp_live_...` API Key |
+| `TELEGRAM_BOT_TOKEN` | 可选 | Telegram Bot Token（来自 @BotFather） |
+| `TELEGRAM_CHAT_ID` | 可选 | 接收通知的 Telegram Chat ID |
+| `BARK_KEY` | 可选 | Bark 推送 Key |
 
 **Variable（均可选，默认值已可用）**
 
 | 名称 | 默认值 | 说明 |
 | --- | --- | --- |
-| `DIGITALPLAT_DOMAINS` | 空 | 指定要续期的域名，一行一个，可用逗号分隔；**留空则自动续期所有免费域名** |
-| `DIGITALPLAT_RENEW_BEFORE_DAYS` | `120` | 剩余天数小于等于该值才续期 |
-| `DIGITALPLAT_RENEWAL_TYPE` | `free` | 续期类型 |
-| `DIGITALPLAT_RENEWAL_YEARS` | `1` | 续期年数 |
-| `DRY_RUN` | 空 | 设为 `1` / `true` 时只检查不续期 |
+| `DIGITALPLAT_DOMAINS` | 空 | 只检查指定域名，一行一个，可用逗号分隔；**留空则检查所有免费域名** |
+| `DIGITALPLAT_RENEW_BEFORE_DAYS` | `120` | 剩余天数小于等于该值则标记为需续期 |
+| `BARK_SERVER` | `https://api.day.app` | Bark 自建服务器地址（可选） |
+
+> Telegram 和 Bark 二选一或同时配置均可；都不配置时脚本只打印日志，不发通知。
 
 ### 第 4 步：手动跑一次验证
 
-打开 `Actions` 页，选中 **DigitalPlat Domain Auto-Renew** → **Run workflow**，确认日志输出：
+打开 `Actions` 页，选中 **DigitalPlat Domain Check & Notify** → **Run workflow**，确认日志输出：
 
 ```
-MODE: auto-renew all free domains (1 eligible)
-[CHECK] example.dpdns.org expires=2027-06-04 days_left=279 status=ok slot=free
-[SKIP] example.dpdns.org not yet within renewal window
-```
-
-若域名已进入续期窗口，则会输出：
-
-```
-[RENEWED] example.dpdns.org new_expires=...
+MODE: check all free domains (1 eligible)
+[CHECK] example.dpdns.org expires=2027-06-04 days_left=279 status=ok slot=free renewal=no
+[SUMMARY] checked=1 needing_renewal=0
+[NOTIFY] Telegram sent
+[NOTIFY] Bark sent
 ```
 
 ## 定时说明
@@ -77,7 +78,7 @@ on:
 
 ```
 ├── .github/workflows/digitalplat-renew.yml   # 月度定时工作流
-├── scripts/renew_domain.py                   # 核心续期脚本
+├── scripts/check_domains.py                  # 检查与通知脚本
 └── .gitignore
 ```
 
@@ -87,13 +88,14 @@ on:
 - 鉴权：`Authorization: Bearer <API Key>`
 - 使用接口：
   - `GET /domains` — 拉取域名清单
-  - `POST /domains/{domain}/renew` — 续期
+
+## 通知渠道
+
+- **Telegram**：调用 Bot API `sendMessage`，需要 `TELEGRAM_BOT_TOKEN` 与 `TELEGRAM_CHAT_ID`
+- **Bark**：调用 Bark 推送服务，需要 `BARK_KEY`（可用 `BARK_SERVER` 指定自建服务器）
 
 ## 注意事项
 
-- **安全**：API Key 请放在 GitHub **Secret** 中，切勿写入源码或提交到仓库。
+- **安全**：API Key、Telegram Token、Bark Key 请放在 GitHub **Secret** 中，切勿写入源码或提交到仓库。
 - **User-Agent**：DigitalPlat 网关（Cloudflare）会拦截类似机器人的自定义 User-Agent（返回 403 Challenge）。脚本默认使用浏览器风格的 UA，如需自定义可设置 `DIGITALPLAT_USER_AGENT`。
-- **免费续期**：免费域名默认通过 `renewal_type=free` 续期，无需支付费用。
-- **Idempotency-Key**：DigitalPlat 的写入类接口要求携带 `Idempotency-Key` 头，脚本每次续期会自动生成一个唯一值。
-- **续期窗口**：平台通常只在剩余有效期低于约 180 天时才接受续期请求。若在窗口外强行续期，接口会返回 `404 registered_domain_not_found`，脚本会记录为错误并继续处理其他域名。
-- 若账号下已有免费续期窗口或冷却限制，重复请求可能被平台拒绝，脚本会将其记录为错误并继续处理其他域名。
+- **续期窗口**：平台通常只在剩余有效期低于约 180 天时才允许续期，且 API 未开放续期接口，请在收到提醒后前往 Dashboard 手动续期。
