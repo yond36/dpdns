@@ -94,4 +94,6 @@ on:
 - **安全**：API Key 请放在 GitHub **Secret** 中，切勿写入源码或提交到仓库。
 - **User-Agent**：DigitalPlat 网关（Cloudflare）会拦截类似机器人的自定义 User-Agent（返回 403 Challenge）。脚本默认使用浏览器风格的 UA，如需自定义可设置 `DIGITALPLAT_USER_AGENT`。
 - **免费续期**：免费域名默认通过 `renewal_type=free` 续期，无需支付费用。
+- **Idempotency-Key**：DigitalPlat 的写入类接口要求携带 `Idempotency-Key` 头，脚本每次续期会自动生成一个唯一值。
+- **续期窗口**：平台通常只在剩余有效期低于约 180 天时才接受续期请求。若在窗口外强行续期，接口会返回 `404 registered_domain_not_found`，脚本会记录为错误并继续处理其他域名。
 - 若账号下已有免费续期窗口或冷却限制，重复请求可能被平台拒绝，脚本会将其记录为错误并继续处理其他域名。
