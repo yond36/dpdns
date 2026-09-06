@@ -29,15 +29,16 @@ jobs:
           python -m pip install --upgrade pip
           pip install --upgrade playwright requests
 
-      - name: Install Playwright browsers
+      - name: Install Google Chrome
         run: |
-          python -m playwright install chrome
-          python -m playwright install-deps chrome
+          sudo apt-get update
+          sudo apt-get install -y google-chrome-stable
+          google-chrome --version
 
       - name: Verify Playwright installation
         run: |
           python -m playwright --version
-          ls -la /home/runner/.cache/ms-playwright/chrome-*
+          python -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); b = p.chromium.launch(channel='chrome'); print('chrome launch OK', b.version); b.close(); p.stop()"
 
       - name: Run renew script
         run: python renew.py
